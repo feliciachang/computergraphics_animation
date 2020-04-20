@@ -26,11 +26,18 @@ vector<VEC3> sphereColors;
 vector<vector<VEC3> > triangleVertices;
 vector<VEC3> triangleColors;
 
+vector<VEC3> cylinderColors;
+vector<float> cylinderRadii;
+vector<MATRIX4> cylinderRotation;
+vector<MATRIX4> cylinderScaling;
+vector<VEC4> cylinderTranslation;
+vector<VEC4> cylinderRightVertex;
+vector<VEC4> cylinderLeftVertex;
+vector<float> cylinderLengths;
 
 //////////////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////////////
-void writePPM(const string& filename, int& xRes, int& yRes, const float* values)
-{
+void writePPM(const string& filename, int& xRes, int& yRes, const float* values){
   int totalCells = xRes * yRes;
   unsigned char* pixels = new unsigned char[3 * totalCells];
   for (int i = 0; i < 3 * totalCells; i++)
@@ -82,30 +89,19 @@ bool rayTriangleIntersection(const VEC3& dVal, const VEC3& eye, vector<VEC3> ver
     return false;
   }
 
-
   t = f * e2.dot(q);
 
   if (t > smallNum) {
     return true;
   }
   return false;
-  // if(parallel >= smallNum && fabs(parallel) >= smallNum){
-  //   if((u >= 0.0 && u <= 1.0) && (v >= 0.0 && u+v <= 1.0)){
-  //     if(t > smallNum) {
-  //       cout << "returned true" << endl;
-  //       return true;
-  //     }
-  //   }
-  // }
-  // return false;
 }
 
 bool raySphereIntersect(const VEC3& center, 
                         const float radius, 
                         const VEC3& rayPos, 
                         const VEC3& rayDir,
-                        float& t)
-{
+                        float& t) {
   const VEC3 op = center - rayPos;
   const float eps = 1e-8;
   const float b = op.dot(rayDir);
@@ -128,53 +124,213 @@ bool raySphereIntersect(const VEC3& center,
   return true;
 }
 
+
+bool rayCylinderIntersection(const VEC3& rayDir, 
+                              const VEC3& rayPos,  
+                              float& radius, 
+                              MATRIX4& rotation,
+                              MATRIX4& scaling,
+                              VEC4& translation,
+                              VEC4& cylinderRightVertex,
+                              VEC4& cylinderLeftVertex,
+                              float& length,
+                              float& t
+                            ){
+  
+  //transform ray into cylinder's local frame
+  MATRIX4 rotate = scaling.inverse() * rotation.inverse();
+  //rotate = rotate.inverse();
+  VEC4 tempPos = VEC4(rayPos[0], rayPos[1], rayPos[2], 0.0);
+  VEC4 tempO = rotate * (tempPos - translation);
+  VEC3 oVector = VEC3(tempO[0], tempO[1], tempO[2]);
+
+  VEC4 tempDir = VEC4(rayDir[0], rayDir[1], rayDir[2], 0.0);
+  VEC4 tempD = rotate * tempDir;
+  VEC3 dVector = VEC3(tempD[0], tempD[1], tempD[2]);
+
+  Real a = (dVector[0]*dVector[0]) + (dVector[1]*dVector[1]);
+  Real b = (2*dVector[0]*oVector[0]) + (2*dVector[1]*oVector[1]);
+  Real c = (oVector[0]*oVector[0]) + (oVector[1]*oVector[1]) - (radius*radius);
+
+  Real determinant = (b*b) - (4*a*c);
+
+  Real smallNum = 0.00000001;
+
+  if (determinant < smallNum){
+    return false;
+  }
+
+  t = (- b - sqrt(determinant))/(2*a);
+
+  if(t < smallNum){
+    t = (- b + sqrt(determinant))/(2*a);
+    if(t < smallNum) {
+      return false;
+    }
+  }
+
+  VEC3 intersection = oVector + (t*dVector);
+
+  VEC3 left = VEC3(cylinderRightVertex[0], cylinderRightVertex[1], cylinderRightVertex[2]);
+  VEC3 right = VEC3(cylinderLeftVertex[0], cylinderLeftVertex[1], cylinderLeftVertex[2]);
+
+  //cout << intersection[2] << length << endl;
+  if(intersection[2] > length || intersection[2] < 0){
+    return false;
+  }
+
+  return true;
+}
 //////////////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////////////
 void rayColor(const VEC3& rayPos, const VEC3& rayDir, VEC3& pixelColor) 
 {
   pixelColor = VEC3(1,1,1);
-
-  // look for intersections
+  
   int hitID = -1;
-  float tMinFound = FLT_MAX;
-  for (int y = 0; y < sphereCenters.size(); y++)
+  float tMinCylinder = FLT_MAX;
+  float tMinSphere = FLT_MAX;
+  float tMinTriangle = FLT_MAX;
+
+  // VEC3 tMinArray = VEC3(FLT_MAX, FLT_MAX, FLT_MAX);
+  // VEC3 index = VEC3(-1, -1, -1);
+  // vector<VEC3> indexColor;
+  // indexColor.push_back(VEC3(-1, -1, -1));
+  // indexColor.push_back(VEC3(-1, -1, -1));
+  // indexColor.push_back(VEC3(-1, -1, -1));
+  for(int y = 0; y < cylinderRadii.size(); y++) 
   {
     float tMin = FLT_MAX;
-    if (raySphereIntersect(sphereCenters[y], sphereRadii[y], rayPos, rayDir, tMin))
-    { 
-      // is the closest so far?
-      if (tMin < tMinFound)
+    if(rayCylinderIntersection(rayDir, 
+                              rayPos, 
+                              cylinderRadii[y], 
+                              cylinderRotation[y], 
+                              cylinderScaling[y],
+                              cylinderTranslation[y],
+                              cylinderRightVertex[y],
+                              cylinderLeftVertex[y],
+                              cylinderLengths[y],
+                              tMin))
+    {
+      if (tMin < tMinCylinder && tMin > 0.0) 
       {
-        tMinFound = tMin;
+        tMinCylinder = tMin;
         hitID = y;
       }
     }
   }
-  //cout << "triangle vertices size" << triangleVertices.size() << endl;
-  bool useTriangle = false;
-  for(int y = 0; y < triangleVertices.size(); y++){
+
+  for(int y = 0; y < sphereCenters.size(); y++) 
+  {
     float tMin = FLT_MAX;
-    if(rayTriangleIntersection(rayDir, rayPos, triangleVertices[y], tMin)){
-      if (tMin < tMinFound)
+    if(raySphereIntersect(sphereCenters[y], sphereRadii[y], rayPos, rayDir, tMin)) 
+    {
+      if(tMin < tMinSphere && tMin > 0.0) 
       {
-        tMinFound = tMin;
+        tMinSphere = tMin;
         hitID = y;
-        useTriangle = true;
       }
     }
   }
   
-  // No intersection, return white
-  if (hitID == -1)
-    return;
-
-  // set to the sphere color
-  if(useTriangle == true) {
-    pixelColor = triangleColors[hitID];
-    //cout << triangleColors[hitID][0] << triangleColors[hitID][0] << triangleColors[hitID][0] << endl;
+  for(int y = 0; y < triangleColors.size(); y++) 
+  {
+    float tMin = FLT_MAX;
+    if(rayTriangleIntersection(rayDir, rayPos, triangleVertices[y], tMin))
+    {
+      if(tMin < tMinTriangle && tMin > 0.0) 
+      {
+        tMinTriangle = tMin;
+        hitID = y;
+      }
+    }
   }
-  else {
+
+  if(hitID == -1) {
+    return;
+  }
+
+  if(tMinCylinder < tMinTriangle && tMinCylinder < tMinSphere) 
+  {
+    pixelColor = cylinderColors[hitID];
+  }
+  else if (tMinTriangle < tMinSphere && tMinTriangle < tMinCylinder) 
+  {
+    pixelColor = triangleColors[hitID];
+    //pixelColor = VEC3(0, 1, 1);
+  }
+  else if (tMinSphere < tMinTriangle && tMinSphere < tMinCylinder) 
+  {
     pixelColor = sphereColors[hitID];
+    //pixelColor = VEC3(0, 1, 0);
+  }
+}
+
+void buildCylinders()
+{
+  cylinderRadii.clear();
+  cylinderColors.clear();
+  cylinderRotation.clear();
+  cylinderTranslation.clear();
+  cylinderRightVertex.clear();
+  cylinderLeftVertex.clear();
+  cylinderLengths.clear();
+
+  displayer.ComputeBonePositions(DisplaySkeleton::BONES_AND_LOCAL_FRAMES);
+
+  // retrieve all the bones of the skeleton
+  vector<MATRIX4>& rotations = displayer.rotations();
+  vector<MATRIX4>& scalings  = displayer.scalings();
+  vector<VEC4>& translations = displayer.translations();
+  vector<float>& lengths     = displayer.lengths();
+
+  // build a sphere list, but skip the first bone, 
+  // it's just the origin
+  int totalBones = rotations.size();
+  for (int x = 1; x < totalBones; x++)
+  {
+    MATRIX4& rotation = rotations[x];
+    MATRIX4& scaling = scalings[x];
+    VEC4& translation = translations[x];
+
+
+    cylinderLengths.push_back(lengths[x]);
+    cylinderRotation.push_back(rotation);
+    cylinderTranslation.push_back(translation);
+    cylinderScaling.push_back(scaling);
+
+    // get the endpoints of the cylinder
+    // left is top, right is bottom
+    VEC4 leftVertex(0,0,0,1);
+    VEC4 rightVertex(0,0,lengths[x],1);
+
+    leftVertex = rotation * scaling * leftVertex + translation;
+    rightVertex = rotation * scaling * rightVertex + translation;
+    cylinderLeftVertex.push_back(leftVertex);
+    cylinderRightVertex.push_back(rightVertex);
+
+    // get the direction vector
+    // VEC3 direction = (rightVertex - leftVertex).head<3>();
+    // const float magnitude = direction.norm();
+    // direction *= 1.0 / magnitude;
+
+    // how many spheres?
+    // const float sphereRadius = 0.05;
+    // const int totalSpheres = magnitude / (2.0 * sphereRadius);
+    // const float rayIncrement = magnitude / (float)totalSpheres;
+
+    //store the spheres
+    cylinderRadii.push_back(0.35);
+    cylinderColors.push_back(VEC3(1,0,0));
+    
+    // cylinderRadii.push_back(0.05);
+    // cylinderColors.push_back(VEC3(1,0,0));
+    // for (int y = 0; y < totalSpheres; y++)
+    // {
+    //   VEC3 center = ((float)y + 0.5) * rayIncrement * direction + leftVertex.head<3>();
+    //   cylinderRadii.push_back(0.05);
+    //   cylinderColors.push_back(VEC3(1, 0, 0));
+    // }
   }
 }
 
@@ -219,6 +375,10 @@ void renderImage(int& xRes, int& yRes, const string& filename) {
                                ratioY * halfY * cameraY;
       const VEC3 rayDir = (rayHitImage - eye).normalized();
 
+      // if(x == 323 && y == 256) {
+      //   continue;
+      // }
+
       // get the color
       VEC3 color;
       rayColor(eye, rayDir, color);
@@ -256,90 +416,126 @@ void setSkeletonsToSpecifiedFrame(int frameIndex)
     displayer.GetSkeleton(0)->setPosture(* (displayer.GetSkeletonMotion(0)->GetPosture(postureID)));
   }
 }
-
 //////////////////////////////////////////////////////////////////////////////////
 // Build a list of spheres in the scene
 //////////////////////////////////////////////////////////////////////////////////
 
 void transformVertices(){
   triangleVertices.clear();
+  triangleColors.clear();
 
   
   vector<VEC3> vertices1;
-  vertices1.push_back(VEC3(5.0, 0.0, 0.0));
-  vertices1.push_back(VEC3(-4.0, 0.0, 4.0));
-  vertices1.push_back(VEC3(5.0, 0.0, 4.0));
+  vertices1.push_back(VEC3(5.0, 0.0, -5.0));
+  vertices1.push_back(VEC3(-5.0, 0.0, 5.0));
+  vertices1.push_back(VEC3(5.0, 0.0, 5.0));
   triangleVertices.push_back(vertices1);
 
   vector<VEC3> vertices2;
-  vertices2.push_back(VEC3(5.0, 0.0, 0.0));
-  vertices2.push_back(VEC3(-4.0, 0.0, 0.0));
-  vertices2.push_back(VEC3(-4.0, 0.0, 4.0));
+  vertices2.push_back(VEC3(5.0, 0.0, -5.0));
+  vertices2.push_back(VEC3(-5.0, 0.0, -5.0));
+  vertices2.push_back(VEC3(-5.0, 0.0, 5.0));
   triangleVertices.push_back(vertices2);
-  //triangleVertices.push_back(vertices);
-  triangleColors.push_back(VEC3(0, 1, 0));
-  triangleColors.push_back(VEC3(0, 0, 1));
-}
 
+  vector<VEC3> vertices3;
+  vertices3.push_back(VEC3(5.0, 0.0, 5.0));
+  vertices3.push_back(VEC3(5.0, 6.0, 5.0));
+  vertices3.push_back(VEC3(-4.0, 3.0, 5.0));
+  triangleVertices.push_back(vertices3);
+  
+  vector<VEC3> vertices4;
+  vertices4.push_back(VEC3(5.0, 0.0, 5.0));
+  vertices4.push_back(VEC3(-4.0, 0.0, 5.0));
+  vertices4.push_back(VEC3(-4.0, 3.0, 5.0));
+  triangleVertices.push_back(vertices4);
+
+  vector<VEC3> vertices5;
+  vertices5.push_back(VEC3(5.0, 0.0, -5.0));
+  vertices5.push_back(VEC3(5.0, 6.0, -5.0));
+  vertices5.push_back(VEC3(-4.0, 3.0, -5.0));
+  triangleVertices.push_back(vertices5);
+  
+  vector<VEC3> vertices6;
+  vertices6.push_back(VEC3(5.0, 0.0, -5.0));
+  vertices6.push_back(VEC3(-4.0, 0.0, -5.0));
+  vertices6.push_back(VEC3(-4.0, 3.0, -5.0));
+  triangleVertices.push_back(vertices6);
+
+  // vector<VEC3> vertices7;
+  // vertices7.push_back(VEC3(5.0, 0.0, -5.0));
+  // vertices7.push_back(VEC3(5.0, 0.0, 5.0));
+  // vertices7.push_back(VEC3(5.0, 6.0, -5.0));
+  // triangleVertices.push_back(vertices7);
+
+  // vector<VEC3> vertices8;
+  // vertices8.push_back(VEC3(5.0, 6.0, 5.0));
+  // vertices8.push_back(VEC3(5.0, 6.0, -5.0));
+  // vertices8.push_back(VEC3(5.0, 0.0, 5.0));
+  // triangleVertices.push_back(vertices8);
+
+  // vector<VEC3> vertices3;
+  // vertices3.push_back(VEC3(5.0, 0.0, -5.0));
+  // vertices3.push_back(VEC3(-5.0, 0.0, 0.0));
+  // vertices3.push_back(VEC3(5.0, 0.0, 0.0));
+  // triangleVertices.push_back(vertices3);
+
+  // vector<VEC3> vertices4;
+  // vertices4.push_back(VEC3(5.0, 0.0, -5.0));
+  // vertices4.push_back(VEC3(5.0, 0.0, -10.0));
+  // vertices4.push_back(VEC3(-5.0, 0.0, -5.0));
+  // triangleVertices.push_back(vertices4);
+  // vector<VEC3> vertices5;
+  // vertices5.push_back(VEC3(5.0, 0.0, -10.0));
+  // vertices5.push_back(VEC3(-5.0, 0.0, -10.0));
+  // vertices5.push_back(VEC3(-5.0, 0.0, -5.0));
+  // triangleVertices.push_back(vertices5);
+
+  // vector<VEC3> vertices4;
+  // vertices4.push_back(VEC3(5.0, 0.0, -4.0));
+  // vertices4.push_back(VEC3(-4.0, 0.0, 0.0));
+  // vertices4.push_back(VEC3(5.0, 0.0, 0.0));
+  // triangleVertices.push_back(vertices4);
+  //triangleVertices.push_back(vertices);
+  triangleColors.push_back(VEC3(0, 1, 1));
+  triangleColors.push_back(VEC3(0, 0, 1));
+  triangleColors.push_back(VEC3(0, 1, 1));
+  triangleColors.push_back(VEC3(0, 0, 1));
+  // triangleColors.push_back(VEC3(0, 1, 1));
+  // triangleColors.push_back(VEC3(0, 1, 1));
+  // triangleColors.push_back(VEC3(0, 1, 1));
+  // triangleColors.push_back(VEC3(0, 1, 1));
+
+  //triangleColors.push_back(VEC3(0, 0, 1));
+  //triangleColors.push_back(VEC3(0, 0, 1));
+  //triangleColors.push_back(VEC3(0, 0, 1));
+  // triangleColors.push_back(VEC3(0, 0, 1));
+}
 
 void buildScene()
 {
   sphereCenters.clear();
   sphereRadii.clear();
   sphereColors.clear();
-  displayer.ComputeBonePositions(DisplaySkeleton::BONES_AND_LOCAL_FRAMES);
 
-  // retrieve all the bones of the skeleton
-  vector<MATRIX4>& rotations = displayer.rotations();
-  vector<MATRIX4>& scalings  = displayer.scalings();
-  vector<VEC4>& translations = displayer.translations();
-  vector<float>& lengths     = displayer.lengths();
+  sphereCenters.push_back(VEC3(2, 0, -3.0));
+  sphereRadii.push_back(1.0);
+  sphereColors.push_back(VEC3(0, 1, 0));
 
-  // build a sphere list, but skip the first bone, 
-  // it's just the origin
-  int totalBones = rotations.size();
-  for (int x = 1; x < totalBones; x++)
-  {
-    MATRIX4& rotation = rotations[x];
-    MATRIX4& scaling = scalings[x];
-    VEC4& translation = translations[x];
+  sphereCenters.push_back(VEC3(2, 2, -3.0));
+  sphereRadii.push_back(1.0);
+  sphereColors.push_back(VEC3(0, 1, 0));
 
-    // get the endpoints of the cylinder
-    VEC4 leftVertex(0,0,0,1);
-    VEC4 rightVertex(0,0,lengths[x],1);
+  // sphereCenters.push_back(VEC3(-3.0, 0.0, 3.0));
+  // sphereRadii.push_back(1.0);
+  // sphereColors.push_back(VEC3(0, 1, 0));
 
-    leftVertex = rotation * scaling * leftVertex + translation;
-    rightVertex = rotation * scaling * rightVertex + translation;
+  // sphereCenters.push_back(VEC3(-3.0, 1.9, 3.0));
+  // sphereRadii.push_back(1.0);
+  // sphereColors.push_back(VEC3(0, 1, 0));
 
-    // get the direction vector
-    VEC3 direction = (rightVertex - leftVertex).head<3>();
-    const float magnitude = direction.norm();
-    direction *= 1.0 / magnitude;
-
-    // how many spheres?
-    const float sphereRadius = 0.05;
-    const int totalSpheres = magnitude / (2.0 * sphereRadius);
-    const float rayIncrement = magnitude / (float)totalSpheres;
-
-    // store the spheres
-    sphereCenters.push_back(leftVertex.head<3>());
-    sphereRadii.push_back(0.05);
-    sphereColors.push_back(VEC3(1,0,0));
-    
-    sphereCenters.push_back(rightVertex.head<3>());
-    sphereRadii.push_back(0.05);
-    sphereColors.push_back(VEC3(1,0,0));
-    for (int y = 0; y < totalSpheres; y++)
-    {
-      VEC3 center = ((float)y + 0.5) * rayIncrement * direction + leftVertex.head<3>();
-      sphereCenters.push_back(center);
-      sphereRadii.push_back(0.05);
-      sphereColors.push_back(VEC3(0,1, 0));
-    }
-    // sphereCenters.push_back(VEC3(0, -1000.0, 10.0));
-    // sphereRadii.push_back(997.0);
-    // sphereColors.push_back(VEC3(0, 1, 0));
-  }
+  sphereCenters.push_back(VEC3(4.5, 3.2, 0.0));
+  sphereRadii.push_back(2.8);
+  sphereColors.push_back(VEC3(0, 1, 1));
 }
 
 //////////////////////////////////////////////////////////////////////////////////
@@ -365,6 +561,7 @@ int main(int argc, char** argv)
   {
     setSkeletonsToSpecifiedFrame(x);
     buildScene();
+    buildCylinders();
     transformVertices();
 
     char buffer[256];
