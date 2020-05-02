@@ -7,8 +7,11 @@
 #include "skeleton.h"
 #include "displaySkeleton.h"
 #include "motion.h"
+#include "perlin.h"
 
 using namespace std;
+
+PerlinNoise pn;
 
 // Stick-man classes
 DisplaySkeleton displayer;    
@@ -26,6 +29,8 @@ vector<VEC3> sphereColors;
 vector<vector<VEC3> > triangleVertices;
 vector<VEC3> triangleColors;
 
+vector<int> portal;
+
 vector<VEC3> cylinderColors;
 vector<float> cylinderRadii;
 vector<MATRIX4> cylinderRotation;
@@ -35,6 +40,19 @@ vector<VEC4> cylinderRightVertex;
 vector<VEC4> cylinderLeftVertex;
 vector<float> cylinderLengths;
 
+class Light {
+  public:
+    VEC3 position;
+    VEC3 color;
+    VEC3 direction;
+  
+  Light(VEC3 pos, VEC3 co, VEC3 direction) : position(pos), color(co), direction(direction) {}
+};
+
+bool hitLight(Light singleLight, const VEC3& rayDir, const VEC3& rayPos, float& t, VEC3& normal);
+VEC3 shading(Light singleLight, const VEC3& rayDir, const VEC3& rayPos, float& t, VEC3& normal, VEC3& color);
+VEC3 lambertian(Light singleLight, const VEC3& rayDir, const VEC3& rayPos, float& t, VEC3& normal);
+VEC3 specular(Light singleLight, const VEC3& rayDir, const VEC3& rayPos, float& t, VEC3& normal);
 //////////////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////////////
 void writePPM(const string& filename, int& xRes, int& yRes, const float* values){
@@ -62,7 +80,40 @@ void writePPM(const string& filename, int& xRes, int& yRes, const float* values)
 //////////////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////////////
 
-bool rayTriangleIntersection(const VEC3& dVal, const VEC3& eye, vector<VEC3> vertices, float& t){
+bool rayTriangleIntersection(const VEC3& dVal, const VEC3& eye, int& y, float& t, VEC3& normal){
+  vector<VEC3> vertices = triangleVertices[y];
+  VEC3 a = vertices[0]; VEC3 b = vertices[1]; VEC3 c = vertices[2];
+  VEC3 e1 = b - a;
+  VEC3 e2 = c - a;
+  VEC3 h = dVal.cross(e2);
+  Real parallel = e1.dot(h);
+  Real smallNum = 0.0001;
+
+  Real f = 1.0 / parallel;
+  VEC3 s = (eye - a);
+  //scalar dot product to find determinant
+  Real u = f * s.dot(h);
+  VEC3 q = s.cross(e1);
+  //scalar dot product to find determinant
+  Real v = f * dVal.dot(q);
+
+  t = f * e2.dot(q);
+
+  if(parallel >= smallNum && fabs(parallel) >= smallNum){
+    if((u >= 0.0 && u <= 1.0) && (v >= 0.0 && u+v <= 1.0)){
+      if(t > smallNum) {
+        normal = (e1).cross(e2);
+        normal = normal / normal.norm();
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+bool rayTriCircleIntersection(const VEC3& dVal, const VEC3& eye, int& y, float& t){
+  vector<VEC3> vertices = triangleVertices[y];
+
   VEC3 a = vertices[0]; VEC3 b = vertices[1]; VEC3 c = vertices[2];
   VEC3 e1 = b - a;
   VEC3 e2 = c - a;
@@ -97,46 +148,48 @@ bool rayTriangleIntersection(const VEC3& dVal, const VEC3& eye, vector<VEC3> ver
   return false;
 }
 
-bool raySphereIntersect(const VEC3& center, 
-                        const float radius, 
-                        const VEC3& rayPos, 
+bool raySphereIntersect(const VEC3& rayPos, 
                         const VEC3& rayDir,
+                        const int& y,
+                        VEC3& normal,
                         float& t) {
-  const VEC3 op = center - rayPos;
-  const float eps = 1e-8;
-  const float b = op.dot(rayDir);
-  float det = b * b - op.dot(op) + radius * radius;
 
-  // determinant check
-  if (det < 0) 
-    return false; 
-  
-  det = sqrt(det);
-  t = b - det;
-  if (t <= eps)
-  {
-    t = b + det;
-    if (t <= eps)
-      t = -1;
+  VEC3 center = sphereCenters[y];
+  float radius = sphereRadii[y];
+
+  float quad1 = (rayDir).dot(rayDir);
+  float quad2 = (2.0 * rayDir).dot(rayPos - center);
+  float quad3 = (rayPos-center).dot(rayPos-center) - (radius*radius);
+  float det = (quad2*quad2) - (4.0*quad1*quad3);
+
+  if(det >= 0.0){
+    t = (-quad2 - sqrt(det))/(2.0*quad1);
+    if(t < 0.0) {
+      t = (-quad2 + sqrt(det))/(2.0*quad1);
+    }
+    normal = (rayPos + (t * rayDir)) - center;
+    normal = normal / normal.norm();
+    return true;
   }
 
-  if (t < 0) return false;
-  return true;
+  return false;
 }
 
 
 bool rayCylinderIntersection(const VEC3& rayDir, 
-                              const VEC3& rayPos,  
-                              float& radius, 
-                              MATRIX4& rotation,
-                              MATRIX4& scaling,
-                              VEC4& translation,
-                              VEC4& cylinderRightVertex,
-                              VEC4& cylinderLeftVertex,
-                              float& length,
-                              float& t
+                             const VEC3& rayPos,
+                             VEC3& normal,  
+                             int y,
+                             float& t
                             ){
-  
+  float radius = cylinderRadii[y];
+  MATRIX4 rotation = cylinderRotation[y];
+  MATRIX4 scaling = cylinderScaling[y];
+  VEC4 translation = cylinderTranslation[y];
+  VEC4 rightVertex = cylinderRightVertex[y];
+  VEC4 leftVertex = cylinderLeftVertex[y];
+  float length = cylinderLengths[y];
+
   //transform ray into cylinder's local frame
   MATRIX4 rotate = scaling.inverse() * rotation.inverse();
   //rotate = rotate.inverse();
@@ -171,99 +224,276 @@ bool rayCylinderIntersection(const VEC3& rayDir,
 
   VEC3 intersection = oVector + (t*dVector);
 
-  VEC3 left = VEC3(cylinderRightVertex[0], cylinderRightVertex[1], cylinderRightVertex[2]);
-  VEC3 right = VEC3(cylinderLeftVertex[0], cylinderLeftVertex[1], cylinderLeftVertex[2]);
+  VEC3 left = VEC3(rightVertex[0], rightVertex[1], rightVertex[2]);
+  VEC3 right = VEC3(leftVertex[0], leftVertex[1], leftVertex[2]);
 
   //cout << intersection[2] << length << endl;
   if(intersection[2] > length || intersection[2] < 0){
     return false;
   }
 
+  VEC4 rotateCenter = (scaling * rotation) * (((rightVertex - leftVertex) / 2) + translation);
+  VEC3 center = VEC3(rotateCenter[0], rotateCenter[1], rotateCenter[2]);
+  VEC4 rotateBack = (scaling * rotation) * (VEC4(intersection[0], intersection[1], intersection[2], 0) + translation);
+  intersection[0] = rotateBack[0];
+  intersection[1] = rotateBack[1];
+  intersection[2] = rotateBack[2];
+
+  normal = (intersection - center) / (intersection - center).norm();
+
   return true;
 }
 //////////////////////////////////////////////////////////////////////////////////
-//////////////////////////////////////////////////////////////////////////////////
-void rayColor(const VEC3& rayPos, const VEC3& rayDir, VEC3& pixelColor) 
-{
-  pixelColor = VEC3(1,1,1);
-  
-  int hitID = -1;
+bool intersectScene(const VEC3& rayDir, const VEC3& rayPos, int& hitID, float& t, int& shape, VEC3& normal) {
+  hitID = -1;
   float tMinCylinder = FLT_MAX;
   float tMinSphere = FLT_MAX;
   float tMinTriangle = FLT_MAX;
+  VEC3 cNorm;
+  VEC3 tNorm;
+  VEC3 sNorm;
+  int cHit;
+  int tHit;
+  int sHit;
 
-  // VEC3 tMinArray = VEC3(FLT_MAX, FLT_MAX, FLT_MAX);
-  // VEC3 index = VEC3(-1, -1, -1);
-  // vector<VEC3> indexColor;
-  // indexColor.push_back(VEC3(-1, -1, -1));
-  // indexColor.push_back(VEC3(-1, -1, -1));
-  // indexColor.push_back(VEC3(-1, -1, -1));
   for(int y = 0; y < cylinderRadii.size(); y++) 
   {
     float tMin = FLT_MAX;
-    if(rayCylinderIntersection(rayDir, 
-                              rayPos, 
-                              cylinderRadii[y], 
-                              cylinderRotation[y], 
-                              cylinderScaling[y],
-                              cylinderTranslation[y],
-                              cylinderRightVertex[y],
-                              cylinderLeftVertex[y],
-                              cylinderLengths[y],
-                              tMin))
+    if(rayCylinderIntersection(rayDir, rayPos, cNorm, y, tMin))
     {
       if (tMin < tMinCylinder && tMin > 0.0) 
       {
         tMinCylinder = tMin;
+        cHit = y;
         hitID = y;
       }
     }
   }
-
-  for(int y = 0; y < sphereCenters.size(); y++) 
+  for(int y = 0; y < sphereCenters.size() - 2; y++) 
   {
     float tMin = FLT_MAX;
-    if(raySphereIntersect(sphereCenters[y], sphereRadii[y], rayPos, rayDir, tMin)) 
+    if(raySphereIntersect(rayPos, rayDir, y, sNorm, tMin)) 
     {
       if(tMin < tMinSphere && tMin > 0.0) 
       {
         tMinSphere = tMin;
+        sHit = y;
         hitID = y;
       }
     }
   }
-  
   for(int y = 0; y < triangleColors.size(); y++) 
   {
     float tMin = FLT_MAX;
-    if(rayTriangleIntersection(rayDir, rayPos, triangleVertices[y], tMin))
-    {
-      if(tMin < tMinTriangle && tMin > 0.0) 
+    if(portal[y] == 2 && rayTriangleIntersection(rayDir, rayPos, y, tMin, tNorm)) {
+      float sMin = FLT_MAX;
+      if(raySphereIntersect(rayPos, rayDir, 3, sNorm, sMin))
       {
-        tMinTriangle = tMin;
-        hitID = y;
+        continue;
+      }
+
+      else{
+        if(tMin < tMinTriangle && tMin > 0.0) 
+        {
+          tMinTriangle = tMin;
+          tHit = y;
+          hitID = y;
+        }
+      }
+    } 
+    else if (portal[y] == 1 && rayTriangleIntersection(rayDir, rayPos, y, tMin, tNorm)) {
+      float sMin = FLT_MAX;
+      if(raySphereIntersect(rayPos, rayDir, 2, sNorm, sMin))
+      {
+        continue;
+      }
+
+      else{
+        if(tMin < tMinTriangle && tMin > 0.0) 
+        {
+          tMinTriangle = tMin;
+          tHit = y;
+          hitID = y;
+        }
+      }
+    } 
+    else {
+      if(rayTriangleIntersection(rayDir, rayPos, y, tMin, tNorm))
+      {
+        if(tMin < tMinTriangle && tMin > 0.0) 
+        {
+          //three vertices
+          tMinTriangle = tMin;
+          tHit = y;
+          hitID = y;
+        }
       }
     }
   }
 
   if(hitID == -1) {
+    return false;
+  }
+
+  if((tMinCylinder < tMinTriangle) && (tMinCylinder < tMinSphere)) 
+  {
+    hitID = cHit;
+    shape = 1;
+    t = tMinCylinder;
+    normal = cNorm;
+  }
+  else if ((tMinSphere < tMinCylinder) && (tMinSphere < tMinTriangle)) 
+  {
+    hitID = sHit;
+    shape = 2;
+    t = tMinSphere;
+    normal = sNorm;
+  }
+  else if ((tMinTriangle < tMinSphere) && (tMinTriangle < tMinCylinder)) 
+  {
+    hitID = tHit;
+    shape = 3;
+    t = tMinTriangle;
+    normal = tNorm;
+  }
+
+  return true;
+}
+
+Real clampColor(Real value)
+{
+  if (value < 0.0)      return 0.0;
+  else if (value > 1.0) return 1.0;
+  return value;
+}
+//////////////////////////////////////////////////////////////////////////////////
+void rayColor(const VEC3& rayPos, const VEC3& rayDir, VEC3& pixelColor) 
+{
+  pixelColor = VEC3(0.381, 0.358, 0.393);
+
+  vector<Light> lights;
+  Light light1 = Light(VEC3(0.0, 5.5, -0.5), VEC3(1.0, 1.0, 1.0), VEC3(0, 0, 0));
+  lights.push_back(light1);
+
+  int hitID;
+  float t;
+  int shape;
+  VEC3 normal;
+  bool intersect = intersectScene(rayDir, rayPos, hitID, t, shape, normal);
+
+  if(intersect == false) {
     return;
   }
 
-  if(tMinCylinder < tMinTriangle && tMinCylinder < tMinSphere) 
+  VEC3 colorSum = VEC3(0, 0, 0); 
+  if(shape == 3)  //triangle
   {
-    pixelColor = cylinderColors[hitID];
+    VEC3 intersection = rayPos + (t * rayDir);
+
+    for( int i = 0; i < lights.size(); i = i+1){
+      if(hitLight(lights[i], rayDir, rayPos, t, normal)) {
+        //cout << "in shadow" << endl;
+        VEC3 color = shading(lights[i], rayDir, rayPos, t, normal, triangleColors[hitID]);
+        //cout << color[0] << " " << color[1] << " " << color[2] << endl;
+        
+        colorSum = colorSum + color;
+        //cout << colorSum[0] << " " << colorSum[1] << " " << colorSum[2] << endl;
+      }
+    }
+    // colorSum[0] = clampColor(colorSum[0] + noise);
+    // colorSum[1] = clampColor(colorSum[1] + noise);
+    // colorSum[2] = clampColor(colorSum[2] + noise);./
+    pixelColor = colorSum;
+    
+    //pixelColor = triangleColors[hitID];
   }
-  else if (tMinTriangle < tMinSphere && tMinTriangle < tMinCylinder) 
+  else if (shape == 1) //cylinder
   {
-    pixelColor = triangleColors[hitID];
-    //pixelColor = VEC3(0, 1, 1);
+    //cout << cylinderColors[hitID][0] << endl;
+    for( int i = 0; i < lights.size(); i = i+1){
+      if(hitLight(lights[i], rayDir, rayPos, t, normal)) {
+        //cout << "in shadow" << endl;
+        VEC3 color = shading(lights[i], rayDir, rayPos, t, normal, cylinderColors[hitID]);
+        //cout << color[0] << " " << color[1] << " " << color[2] << endl;
+        colorSum = colorSum + color;
+        //cout << colorSum[0] << " " << colorSum[1] << " " << colorSum[2] << endl;
+      }
+    }
+    pixelColor = colorSum;
   }
-  else if (tMinSphere < tMinTriangle && tMinSphere < tMinCylinder) 
+  else if (shape == 2) //sphere
   {
-    pixelColor = sphereColors[hitID];
-    //pixelColor = VEC3(0, 1, 0);
+    //cout << cylinderColors[hitID][0] << endl;
+    for( int i = 0; i < lights.size(); i = i+1){
+      if(hitLight(lights[i], rayDir, rayPos, t, normal)) {
+        //cout << "in shadow" << endl;
+        VEC3 color = shading(lights[i], rayDir, rayPos, t, normal, sphereColors[hitID]);
+        //cout << color[0] << " " << color[1] << " " << color[2] << endl;
+        colorSum = colorSum + color;
+        //cout << colorSum[0] << " " << colorSum[1] << " " << colorSum[2] << endl;
+      }
+    }
+    pixelColor = colorSum;
+    //cout << pixelColor[0] << " " << pixelColor[1] << " " << pixelColor[2] << endl;
   }
+}
+
+bool hitLight(Light singleLight, const VEC3& rayDir, const VEC3& rayPos, float& t, VEC3& normal){
+    VEC3 shadowPos = rayPos + t * rayDir;
+    shadowPos = shadowPos + (normal*0.01);
+    VEC3 shadowDir = (singleLight.position - shadowPos).normalized();
+    
+    VEC3 norm = normal;
+    int hitID;
+    int shape;
+    float tempT;
+    bool inter = intersectScene(shadowDir, shadowPos, hitID, tempT, shape, norm);
+    if(inter == true){
+      return false;
+    }
+    return true;
+}
+
+VEC3 shading(Light singleLight, const VEC3& rayDir, const VEC3& rayPos, float& t, VEC3& normal, VEC3& color){
+  VEC3 newColor;
+  VEC3 l = lambertian(singleLight, rayDir, rayPos, t, normal);
+  VEC3 s = specular(singleLight, rayDir, rayPos, t, normal);
+  newColor = color.cwiseProduct(l+s);
+  return newColor;
+}
+
+VEC3 lambertian(Light singleLight, const VEC3& rayDir, const VEC3& rayPos, float& t, VEC3& normal){
+  //the ray is the intersection point
+  VEC3 ray = rayPos + (t * rayDir);
+  //the light direction is the light ray emitted from the sphere
+  singleLight.direction = singleLight.position - ray;
+  //normalizing both values
+  VEC3 normalizedLight = singleLight.direction / singleLight.direction.norm();
+  //project light onto the normal
+  Real nDotl = normal.dot(normalizedLight);
+  VEC3 lambertian = singleLight.color * std::max(0.0, nDotl);
+  return lambertian;
+}
+
+VEC3 specular(Light singleLight, const VEC3& rayDir, const VEC3& rayPos, float& t, VEC3& normal){
+    //the ray is the intersection point
+  VEC3 ray = rayPos + t * rayDir;
+  //the light direction is the light ray emitted from the sphere
+  singleLight.direction = singleLight.position - ray;
+  //normalizing both values
+  VEC3 normalizedLight = singleLight.direction.normalized();
+
+  Real phong = 10.0;
+  // //v is the eye ray emitted from the sphere
+  VEC3 v = rayPos - ray;
+  VEC3 normalizedV = v / v.norm();
+  //might want to normalize light first
+  VEC3 r = -normalizedLight + 2*(normalizedLight.dot(normal))*normal;
+  VEC3 normalizedR = r / r.norm();
+  Real nDoth = normalizedR.dot(normalizedV);
+
+  VEC3 specular = singleLight.color * pow(std::max(0.0, nDoth), phong);
+  return specular;
 }
 
 void buildCylinders()
@@ -309,28 +539,10 @@ void buildCylinders()
     cylinderLeftVertex.push_back(leftVertex);
     cylinderRightVertex.push_back(rightVertex);
 
-    // get the direction vector
-    // VEC3 direction = (rightVertex - leftVertex).head<3>();
-    // const float magnitude = direction.norm();
-    // direction *= 1.0 / magnitude;
-
-    // how many spheres?
-    // const float sphereRadius = 0.05;
-    // const int totalSpheres = magnitude / (2.0 * sphereRadius);
-    // const float rayIncrement = magnitude / (float)totalSpheres;
-
     //store the spheres
     cylinderRadii.push_back(0.35);
-    cylinderColors.push_back(VEC3(1,0,0));
+    cylinderColors.push_back(VEC3(1,1,1));
     
-    // cylinderRadii.push_back(0.05);
-    // cylinderColors.push_back(VEC3(1,0,0));
-    // for (int y = 0; y < totalSpheres; y++)
-    // {
-    //   VEC3 center = ((float)y + 0.5) * rayIncrement * direction + leftVertex.head<3>();
-    //   cylinderRadii.push_back(0.05);
-    //   cylinderColors.push_back(VEC3(1, 0, 0));
-    // }
   }
 }
 
@@ -375,9 +587,9 @@ void renderImage(int& xRes, int& yRes, const string& filename) {
                                ratioY * halfY * cameraY;
       const VEC3 rayDir = (rayHitImage - eye).normalized();
 
-      // if(x == 323 && y == 256) {
-      //   continue;
-      // }
+      if(x == 306 && y == 93) {
+        cout << "hit" << endl;
+      }
 
       // get the color
       VEC3 color;
@@ -420,95 +632,263 @@ void setSkeletonsToSpecifiedFrame(int frameIndex)
 // Build a list of spheres in the scene
 //////////////////////////////////////////////////////////////////////////////////
 
-void transformVertices(){
+void buildTriangles(){
   triangleVertices.clear();
   triangleColors.clear();
+  portal.clear();
 
-  
+  //floor
   vector<VEC3> vertices1;
-  vertices1.push_back(VEC3(5.0, 0.0, -5.0));
-  vertices1.push_back(VEC3(-5.0, 0.0, 5.0));
-  vertices1.push_back(VEC3(5.0, 0.0, 5.0));
+  vertices1.push_back(VEC3(20.0, 0.0, -20.0));
+  vertices1.push_back(VEC3(-20.0, 0.0, 20.0));
+  vertices1.push_back(VEC3(20.0, 0.0, 20.0));
   triangleVertices.push_back(vertices1);
+  portal.push_back(0);
 
   vector<VEC3> vertices2;
-  vertices2.push_back(VEC3(5.0, 0.0, -5.0));
-  vertices2.push_back(VEC3(-5.0, 0.0, -5.0));
-  vertices2.push_back(VEC3(-5.0, 0.0, 5.0));
+  vertices2.push_back(VEC3(20.0, 0.0, -20.0));
+  vertices2.push_back(VEC3(-20.0, 0.0, -20.0));
+  vertices2.push_back(VEC3(-20.0, 0.0, 20.0));
   triangleVertices.push_back(vertices2);
+  portal.push_back(0);
 
+  triangleColors.push_back(VEC3(0.371, 0.348, 0.383));
+  triangleColors.push_back(VEC3(0.371, 0.354, 0.383));
+
+  //left wall 
   vector<VEC3> vertices3;
-  vertices3.push_back(VEC3(5.0, 0.0, 5.0));
-  vertices3.push_back(VEC3(5.0, 6.0, 5.0));
   vertices3.push_back(VEC3(-4.0, 3.0, 5.0));
+  vertices3.push_back(VEC3(5.0, 5.5, 5.0));
+  vertices3.push_back(VEC3(5.0, 0.0, 5.0));
   triangleVertices.push_back(vertices3);
+  portal.push_back(0);
   
   vector<VEC3> vertices4;
   vertices4.push_back(VEC3(5.0, 0.0, 5.0));
   vertices4.push_back(VEC3(-4.0, 0.0, 5.0));
   vertices4.push_back(VEC3(-4.0, 3.0, 5.0));
   triangleVertices.push_back(vertices4);
+  portal.push_back(0);
 
+  triangleColors.push_back(VEC3(0.588, 0.533, 0.552));
+  triangleColors.push_back(VEC3(0.588, 0.533, 0.552));
+
+  //right wall
   vector<VEC3> vertices5;
   vertices5.push_back(VEC3(5.0, 0.0, -5.0));
-  vertices5.push_back(VEC3(5.0, 6.0, -5.0));
+  vertices5.push_back(VEC3(5.0, 5.5, -5.0));
   vertices5.push_back(VEC3(-4.0, 3.0, -5.0));
   triangleVertices.push_back(vertices5);
+  portal.push_back(0);
   
   vector<VEC3> vertices6;
-  vertices6.push_back(VEC3(5.0, 0.0, -5.0));
-  vertices6.push_back(VEC3(-4.0, 0.0, -5.0));
   vertices6.push_back(VEC3(-4.0, 3.0, -5.0));
+  vertices6.push_back(VEC3(-4.0, 0.0, -5.0));
+  vertices6.push_back(VEC3(5.0, 0.0, -5.0));
   triangleVertices.push_back(vertices6);
+  portal.push_back(0);
 
-  // vector<VEC3> vertices7;
-  // vertices7.push_back(VEC3(5.0, 0.0, -5.0));
-  // vertices7.push_back(VEC3(5.0, 0.0, 5.0));
-  // vertices7.push_back(VEC3(5.0, 6.0, -5.0));
-  // triangleVertices.push_back(vertices7);
+  triangleColors.push_back(VEC3(0.588, 0.533, 0.552));
+  triangleColors.push_back(VEC3(0.588, 0.533, 0.552));
 
-  // vector<VEC3> vertices8;
-  // vertices8.push_back(VEC3(5.0, 6.0, 5.0));
-  // vertices8.push_back(VEC3(5.0, 6.0, -5.0));
-  // vertices8.push_back(VEC3(5.0, 0.0, 5.0));
-  // triangleVertices.push_back(vertices8);
 
-  // vector<VEC3> vertices3;
-  // vertices3.push_back(VEC3(5.0, 0.0, -5.0));
-  // vertices3.push_back(VEC3(-5.0, 0.0, 0.0));
-  // vertices3.push_back(VEC3(5.0, 0.0, 0.0));
-  // triangleVertices.push_back(vertices3);
+  // //back wall
+  vector<VEC3> vertices7;
+  vertices7.push_back(VEC3(5.0, 0.0, -5.0));
+  vertices7.push_back(VEC3(5.0, 0.0, 5.0));
+  vertices7.push_back(VEC3(5.0, 5.5, -5.0));
+  triangleVertices.push_back(vertices7);
+  portal.push_back(1);
 
-  // vector<VEC3> vertices4;
-  // vertices4.push_back(VEC3(5.0, 0.0, -5.0));
-  // vertices4.push_back(VEC3(5.0, 0.0, -10.0));
-  // vertices4.push_back(VEC3(-5.0, 0.0, -5.0));
-  // triangleVertices.push_back(vertices4);
-  // vector<VEC3> vertices5;
-  // vertices5.push_back(VEC3(5.0, 0.0, -10.0));
-  // vertices5.push_back(VEC3(-5.0, 0.0, -10.0));
-  // vertices5.push_back(VEC3(-5.0, 0.0, -5.0));
-  // triangleVertices.push_back(vertices5);
+  vector<VEC3> vertices8;
+  vertices8.push_back(VEC3(5.0, 5.5, 5.0));
+  vertices8.push_back(VEC3(5.0, 5.5, -5.0));
+  vertices8.push_back(VEC3(5.0, 0.0, 5.0));
+  triangleVertices.push_back(vertices8);
+  portal.push_back(1);
 
-  // vector<VEC3> vertices4;
-  // vertices4.push_back(VEC3(5.0, 0.0, -4.0));
-  // vertices4.push_back(VEC3(-4.0, 0.0, 0.0));
-  // vertices4.push_back(VEC3(5.0, 0.0, 0.0));
-  // triangleVertices.push_back(vertices4);
-  //triangleVertices.push_back(vertices);
-  triangleColors.push_back(VEC3(0, 1, 1));
-  triangleColors.push_back(VEC3(0, 0, 1));
-  triangleColors.push_back(VEC3(0, 1, 1));
-  triangleColors.push_back(VEC3(0, 0, 1));
-  // triangleColors.push_back(VEC3(0, 1, 1));
-  // triangleColors.push_back(VEC3(0, 1, 1));
-  // triangleColors.push_back(VEC3(0, 1, 1));
-  // triangleColors.push_back(VEC3(0, 1, 1));
+  triangleColors.push_back(VEC3(0.949, 0.894, 0.737));
+  triangleColors.push_back(VEC3(0.949, 0.894, 0.737));
 
-  //triangleColors.push_back(VEC3(0, 0, 1));
-  //triangleColors.push_back(VEC3(0, 0, 1));
-  //triangleColors.push_back(VEC3(0, 0, 1));
-  // triangleColors.push_back(VEC3(0, 0, 1));
+  //left2
+  VEC3 center = VEC3(8.0, 3.15, 1.875);
+  Real radians = (-45 * M_PI) / 180;
+  MATRIX3 rotation;
+  rotation(0, 0) = cos(radians);
+  rotation(0, 1) = 0.0;
+  rotation(0, 2) = -sin(radians);
+  rotation(1, 0) = 0.0;
+  rotation(1, 1) = 1.0;
+  rotation(1, 2) = 0.0;
+  rotation(2, 0) = sin(radians);
+  rotation(2, 1) = 0.0;
+  rotation(2, 2) = cos(radians);
+
+  vector<VEC3> vertices9;
+  vertices9.push_back(VEC3(4.55, 6.3, 3.75));
+  vertices9.push_back(VEC3(12.0, 6.3, 3.75));
+  vertices9.push_back(VEC3(12.0, 0.0, 3.75));
+  portal.push_back(0);
+  for(int i = 0; i < vertices9.size(); i = i+1){
+    vertices9[i] = vertices9[i] - center;
+  }
+  for(int i = 0; i < vertices9.size(); i=i+1){
+    vertices9[i] = rotation * vertices9[i];
+  }
+  for(int i = 0; i < vertices9.size(); i=i+1){
+    vertices9[i] = vertices9[i] + center;
+  }
+  triangleVertices.push_back(vertices9);
+
+  vector<VEC3> vertices10;
+  vertices10.push_back(VEC3(12.0, 0.0, 3.75));
+  vertices10.push_back(VEC3(4.55, 0.0, 3.75));
+  vertices10.push_back(VEC3(4.55, 6.3, 3.75));
+  portal.push_back(0);
+  for(int i = 0; i < vertices10.size(); i = i+1){
+    vertices10[i] = vertices10[i] - center;
+  }
+  for(int i = 0; i < vertices10.size(); i=i+1){
+    vertices10[i] = rotation * vertices10[i];
+  }
+  for(int i = 0; i < vertices10.size(); i=i+1){
+    vertices10[i] = vertices10[i] + center;
+  }
+  triangleVertices.push_back(vertices10);
+
+  triangleColors.push_back(VEC3(0.688, 0.633, 0.652));
+  triangleColors.push_back(VEC3(0.688, 0.633, 0.652));
+
+  // right 2
+  center = VEC3(8.0, 3.0, -1.875);
+  radians = (45 * M_PI) / 180;
+  rotation(0, 0) = cos(radians);
+  rotation(0, 2) = -sin(radians);
+  rotation(2, 0) = sin(radians);
+  rotation(2, 2) = cos(radians);
+
+  vector<VEC3> vertices11;
+  vertices11.push_back(VEC3(13.0, 0.0, -3.75));
+  vertices11.push_back(VEC3(13.0, 6.5, -3.75));
+  vertices11.push_back(VEC3(5.0, 6.0, -3.75));
+  portal.push_back(2);
+  for(int i = 0; i < vertices11.size(); i = i+1){
+    vertices11[i] = vertices11[i] - center;
+  }
+  for(int i = 0; i < vertices11.size(); i=i+1){
+    vertices11[i] = rotation * vertices11[i];
+  }
+  for(int i = 0; i < vertices11.size(); i=i+1){
+    vertices11[i] = vertices11[i] + center;
+  }
+  triangleVertices.push_back(vertices11);
+
+  vector<VEC3> vertices12;
+  vertices12.push_back(VEC3(5.0, 6.0, -3.75));
+  vertices12.push_back(VEC3(5.0, 0.0, -3.75));
+  vertices12.push_back(VEC3(13.0, 0.0, -3.75));
+  portal.push_back(2);
+  for(int i = 0; i < vertices12.size(); i = i+1){
+    vertices12[i] = vertices12[i] - center;
+  }
+  for(int i = 0; i < vertices12.size(); i=i+1){
+    vertices12[i] = rotation * vertices12[i];
+  }
+  for(int i = 0; i < vertices12.size(); i=i+1){
+    vertices12[i] = vertices12[i] + center;
+  }
+  triangleVertices.push_back(vertices12);
+
+  triangleColors.push_back(VEC3(0.688, 0.633, 0.652));
+  triangleColors.push_back(VEC3(0.688, 0.633, 0.652));
+
+
+// level 3
+  center = VEC3(16, 3.3, -0.9);
+  radians = (-55 * M_PI) / 180;
+  rotation(0, 0) = cos(radians);
+  rotation(0, 2) = -sin(radians);
+  rotation(2, 0) = sin(radians);
+  rotation(2, 2) = cos(radians);
+  
+  vector<VEC3> vertices13;
+  vertices13.push_back(VEC3(14, 6.6, -1.8));
+  vertices13.push_back(VEC3(20, 6.6, -1.8));
+  vertices13.push_back(VEC3(20, 0.0, -1.8));
+  portal.push_back(0);
+  for(int i = 0; i < vertices13.size(); i = i+1){
+    vertices13[i] = vertices13[i] - center;
+  }
+  for(int i = 0; i < vertices13.size(); i=i+1){
+    vertices13[i] = rotation * vertices13[i];
+  }
+  for(int i = 0; i < vertices13.size(); i=i+1){
+    vertices13[i] = vertices13[i] + center;
+  }
+  triangleVertices.push_back(vertices13);
+
+  vector<VEC3> vertices14;
+  vertices14.push_back(VEC3(20, 0.0, -1.8));
+  vertices14.push_back(VEC3(14, 0.0, -1.8));
+  vertices14.push_back(VEC3(14, 6.6, -1.8));
+  portal.push_back(0);
+  for(int i = 0; i < vertices14.size(); i = i+1){
+    vertices14[i] = vertices14[i] - center;
+  }
+  for(int i = 0; i < vertices14.size(); i=i+1){
+    vertices14[i] = rotation * vertices14[i];
+  }
+  for(int i = 0; i < vertices14.size(); i=i+1){
+    vertices14[i] = vertices14[i] + center;
+  }
+  triangleVertices.push_back(vertices14);
+
+  triangleColors.push_back(VEC3(0.949, 0.894, 0.737));
+  triangleColors.push_back(VEC3(0.949, 0.894, 0.737));
+
+
+  center = VEC3(17, 3.0, -3);
+  radians = (55 * M_PI) / 180;
+  rotation(0, 0) = cos(radians);
+  rotation(0, 2) = -sin(radians);
+  rotation(2, 0) = sin(radians);
+  rotation(2, 2) = cos(radians);
+
+  vector<VEC3> vertices15;
+  vertices15.push_back(VEC3(16.5, 0.0, -6));
+  vertices15.push_back(VEC3(16.5, 7, -6));
+  vertices15.push_back(VEC3(13.0, 7, -6));
+  portal.push_back(0);
+  for(int i = 0; i < vertices15.size(); i = i+1){
+    vertices15[i] = vertices15[i] - center;
+  }
+  for(int i = 0; i < vertices15.size(); i=i+1){
+    vertices15[i] = rotation * vertices15[i];
+  }
+  for(int i = 0; i < vertices15.size(); i=i+1){
+    vertices15[i] = vertices15[i] + center;
+  }
+  triangleVertices.push_back(vertices15);
+
+  vector<VEC3> vertices16;
+  vertices16.push_back(VEC3(16.5, 7, -6));
+  vertices16.push_back(VEC3(16.5, 0.0, -6));
+  vertices16.push_back(VEC3(16.5, 0.0, -6));
+  portal.push_back(0);
+  for(int i = 0; i < vertices16.size(); i = i+1){
+    vertices16[i] = vertices16[i] - center;
+  }
+  for(int i = 0; i < vertices16.size(); i=i+1){
+    vertices16[i] = rotation * vertices16[i];
+  }
+  for(int i = 0; i < vertices16.size(); i=i+1){
+    vertices16[i] = vertices16[i] + center;
+  }
+  triangleVertices.push_back(vertices16);
+
+  triangleColors.push_back(VEC3(0.949, 0.894, 0.737));
+  triangleColors.push_back(VEC3(0.949, 0.894, 0.737));
+
 }
 
 void buildScene()
@@ -519,23 +899,19 @@ void buildScene()
 
   sphereCenters.push_back(VEC3(2, 0, -3.0));
   sphereRadii.push_back(1.0);
-  sphereColors.push_back(VEC3(0, 1, 0));
+  sphereColors.push_back(VEC3(1, 1, 1));
 
   sphereCenters.push_back(VEC3(2, 2, -3.0));
   sphereRadii.push_back(1.0);
+  sphereColors.push_back(VEC3(1, 1, 1));
+
+  sphereCenters.push_back(VEC3(4.5, 2.6, 0.0));
+  sphereRadii.push_back(2.3);
+  sphereColors.push_back(VEC3(1, 0, 0));
+
+  sphereCenters.push_back(VEC3(8.0, 2.6, -2.2));
+  sphereRadii.push_back(2.2);
   sphereColors.push_back(VEC3(0, 1, 0));
-
-  // sphereCenters.push_back(VEC3(-3.0, 0.0, 3.0));
-  // sphereRadii.push_back(1.0);
-  // sphereColors.push_back(VEC3(0, 1, 0));
-
-  // sphereCenters.push_back(VEC3(-3.0, 1.9, 3.0));
-  // sphereRadii.push_back(1.0);
-  // sphereColors.push_back(VEC3(0, 1, 0));
-
-  sphereCenters.push_back(VEC3(4.5, 3.2, 0.0));
-  sphereRadii.push_back(2.8);
-  sphereColors.push_back(VEC3(0, 1, 1));
 }
 
 //////////////////////////////////////////////////////////////////////////////////
@@ -562,7 +938,7 @@ int main(int argc, char** argv)
     setSkeletonsToSpecifiedFrame(x);
     buildScene();
     buildCylinders();
-    transformVertices();
+    buildTriangles();
 
     char buffer[256];
     sprintf(buffer, "./frames/frame.%04i.ppm", x / 8);

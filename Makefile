@@ -4,7 +4,7 @@ CFLAGS     = -c -Wall -O3
 LDFLAGS    = 
 EXECUTABLE = previz
 
-SOURCES    = previz.cpp skeleton.cpp motion.cpp displaySkeleton.cpp
+SOURCES    = previz.cpp skeleton.cpp motion.cpp displaySkeleton.cpp perlin.cpp
 OBJECTS    = $(SOURCES:.cpp=.o)
 
 all: $(SOURCES) $(EXECUTABLE)
