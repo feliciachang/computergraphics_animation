@@ -11,7 +11,7 @@
 
 using namespace std;
 
-PerlinNoise pn;
+//PerlinNoise pn;
 
 // Stick-man classes
 DisplaySkeleton displayer;    
@@ -269,7 +269,7 @@ bool intersectScene(const VEC3& rayDir, const VEC3& rayPos, int& hitID, float& t
       }
     }
   }
-  for(int y = 0; y < sphereCenters.size() - 2; y++) 
+  for(int y = 0; y < sphereCenters.size() - 3; y++) 
   {
     float tMin = FLT_MAX;
     if(raySphereIntersect(rayPos, rayDir, y, sNorm, tMin)) 
@@ -285,7 +285,23 @@ bool intersectScene(const VEC3& rayDir, const VEC3& rayPos, int& hitID, float& t
   for(int y = 0; y < triangleColors.size(); y++) 
   {
     float tMin = FLT_MAX;
-    if(portal[y] == 2 && rayTriangleIntersection(rayDir, rayPos, y, tMin, tNorm)) {
+      if(portal[y] == 3 && rayTriangleIntersection(rayDir, rayPos, y, tMin, tNorm)) {
+      float sMin = FLT_MAX;
+      if(raySphereIntersect(rayPos, rayDir, 4, sNorm, sMin))
+      {
+        continue;
+      }
+
+      else{
+        if(tMin < tMinTriangle && tMin > 0.0) 
+        {
+          tMinTriangle = tMin;
+          tHit = y;
+          hitID = y;
+        }
+      }
+    } 
+    else if(portal[y] == 2 && rayTriangleIntersection(rayDir, rayPos, y, tMin, tNorm)) {
       float sMin = FLT_MAX;
       if(raySphereIntersect(rayPos, rayDir, 3, sNorm, sMin))
       {
@@ -372,8 +388,12 @@ void rayColor(const VEC3& rayPos, const VEC3& rayDir, VEC3& pixelColor)
   pixelColor = VEC3(0.381, 0.358, 0.393);
 
   vector<Light> lights;
-  Light light1 = Light(VEC3(0.0, 5.5, -0.5), VEC3(1.0, 1.0, 1.0), VEC3(0, 0, 0));
+  Light light1 = Light(VEC3(0, 5.5, 0), VEC3(0.988, 0.965, 1), VEC3(0, 0, 0));
   lights.push_back(light1);
+  // Light light2 = Light(VEC3(0, 200.5, 0), VEC3(1, 1, 1), VEC3(0, 0, 0));
+  // lights.push_back(light2);
+  //   Light light3 = Light(VEC3(0, 12.5, 0), VEC3(0.371, 0.348, 0.383), VEC3(0, 0, 0));
+  // lights.push_back(light3);
 
   int hitID;
   float t;
@@ -458,7 +478,7 @@ VEC3 shading(Light singleLight, const VEC3& rayDir, const VEC3& rayPos, float& t
   VEC3 newColor;
   VEC3 l = lambertian(singleLight, rayDir, rayPos, t, normal);
   VEC3 s = specular(singleLight, rayDir, rayPos, t, normal);
-  newColor = color.cwiseProduct(l+s);
+  newColor = color.cwiseProduct(l);
   return newColor;
 }
 
@@ -470,6 +490,7 @@ VEC3 lambertian(Light singleLight, const VEC3& rayDir, const VEC3& rayPos, float
   //normalizing both values
   VEC3 normalizedLight = singleLight.direction / singleLight.direction.norm();
   //project light onto the normal
+  normal = normal.normalized();
   Real nDotl = normal.dot(normalizedLight);
   VEC3 lambertian = singleLight.color * std::max(0.0, nDotl);
   return lambertian;
@@ -563,6 +584,7 @@ void renderImage(int& xRes, int& yRes, const string& filename) {
   vector<VEC4>& translations = displayer.translations();
   VEC4 pelvisTranslation = translations[1];
   VEC3 lookingAt = VEC3(pelvisTranslation[0], pelvisTranslation[1], pelvisTranslation[2]);
+  //cout << pelvisTranslation[0] << " " << pelvisTranslation[1] << " " << pelvisTranslation[2] << " " << endl;
   VEC3 up(0,1,0); 
   // allocate the final image
   const int totalCells = xRes * yRes;
@@ -587,9 +609,9 @@ void renderImage(int& xRes, int& yRes, const string& filename) {
                                ratioY * halfY * cameraY;
       const VEC3 rayDir = (rayHitImage - eye).normalized();
 
-      if(x == 306 && y == 93) {
-        cout << "hit" << endl;
-      }
+      // if(x == 318 && y == 37) {
+      //   cout << "hit" << endl;
+      // }
 
       // get the color
       VEC3 color;
@@ -812,10 +834,10 @@ void buildTriangles(){
   rotation(2, 2) = cos(radians);
   
   vector<VEC3> vertices13;
-  vertices13.push_back(VEC3(14, 6.6, -1.8));
-  vertices13.push_back(VEC3(20, 6.6, -1.8));
+  vertices13.push_back(VEC3(13.8, 6.8, -1.8));
+  vertices13.push_back(VEC3(20, 6.8, -1.8));
   vertices13.push_back(VEC3(20, 0.0, -1.8));
-  portal.push_back(0);
+  portal.push_back(3);
   for(int i = 0; i < vertices13.size(); i = i+1){
     vertices13[i] = vertices13[i] - center;
   }
@@ -829,9 +851,9 @@ void buildTriangles(){
 
   vector<VEC3> vertices14;
   vertices14.push_back(VEC3(20, 0.0, -1.8));
-  vertices14.push_back(VEC3(14, 0.0, -1.8));
-  vertices14.push_back(VEC3(14, 6.6, -1.8));
-  portal.push_back(0);
+  vertices14.push_back(VEC3(13.8, 0.0, -1.8));
+  vertices14.push_back(VEC3(13.8, 6.8, -1.8));
+  portal.push_back(3);
   for(int i = 0; i < vertices14.size(); i = i+1){
     vertices14[i] = vertices14[i] - center;
   }
@@ -855,9 +877,9 @@ void buildTriangles(){
   rotation(2, 2) = cos(radians);
 
   vector<VEC3> vertices15;
-  vertices15.push_back(VEC3(16.5, 0.0, -6));
-  vertices15.push_back(VEC3(16.5, 7, -6));
-  vertices15.push_back(VEC3(13.0, 7, -6));
+  vertices15.push_back(VEC3(16.6, 0.0, -6));
+  vertices15.push_back(VEC3(16.6, 7.2, -6));
+  vertices15.push_back(VEC3(13.0, 7.2, -6));
   portal.push_back(0);
   for(int i = 0; i < vertices15.size(); i = i+1){
     vertices15[i] = vertices15[i] - center;
@@ -871,9 +893,9 @@ void buildTriangles(){
   triangleVertices.push_back(vertices15);
 
   vector<VEC3> vertices16;
-  vertices16.push_back(VEC3(16.5, 7, -6));
-  vertices16.push_back(VEC3(16.5, 0.0, -6));
-  vertices16.push_back(VEC3(16.5, 0.0, -6));
+  vertices16.push_back(VEC3(16.6, 7.2, -6));
+  vertices16.push_back(VEC3(16.6, 0.0, -6));
+  vertices16.push_back(VEC3(16.6, 0.0, -6));
   portal.push_back(0);
   for(int i = 0; i < vertices16.size(); i = i+1){
     vertices16[i] = vertices16[i] - center;
@@ -888,6 +910,92 @@ void buildTriangles(){
 
   triangleColors.push_back(VEC3(0.949, 0.894, 0.737));
   triangleColors.push_back(VEC3(0.949, 0.894, 0.737));
+
+
+  //level 4
+  center = VEC3(16, 3.3, -0.9);
+  radians = (-55 * M_PI) / 180;
+  rotation(0, 0) = cos(radians);
+  rotation(0, 2) = -sin(radians);
+  rotation(2, 0) = sin(radians);
+  rotation(2, 2) = cos(radians);
+  
+  vector<VEC3> vertices17;
+  vertices17.push_back(VEC3(13.8, 6.8, -1.8));
+  vertices17.push_back(VEC3(20, 6.8, -1.8));
+  vertices17.push_back(VEC3(20, 0.0, -1.8));
+  portal.push_back(0);
+  for(int i = 0; i < vertices17.size(); i = i+1){
+    vertices17[i] = vertices17[i] - center;
+  }
+  for(int i = 0; i < vertices17.size(); i=i+1){
+    vertices17[i] = rotation * vertices17[i];
+  }
+  for(int i = 0; i < vertices17.size(); i=i+1){
+    vertices17[i] = vertices17[i] + center;
+  }
+  triangleVertices.push_back(vertices17);
+
+  vector<VEC3> vertices18;
+  vertices18.push_back(VEC3(20, 0.0, -1.8));
+  vertices18.push_back(VEC3(13.8, 0.0, -1.8));
+  vertices18.push_back(VEC3(13.8, 6.8, -1.8));
+  portal.push_back(0);
+  for(int i = 0; i < vertices18.size(); i = i+1){
+    vertices18[i] = vertices18[i] - center;
+  }
+  for(int i = 0; i < vertices18.size(); i=i+1){
+    vertices18[i] = rotation * vertices18[i];
+  }
+  for(int i = 0; i < vertices18.size(); i=i+1){
+    vertices18[i] = vertices18[i] + center;
+  }
+  triangleVertices.push_back(vertices18);
+
+  triangleColors.push_back(VEC3(0.949, 0.949, 0.949));
+  triangleColors.push_back(VEC3(0.949, 0.949, 0.949));
+
+
+  // center = VEC3(21, 4, -3);
+  // radians = (55 * M_PI) / 180;
+  // rotation(0, 0) = cos(radians);
+  // rotation(0, 2) = -sin(radians);
+  // rotation(2, 0) = sin(radians);
+
+  // vector<VEC3> vertices19;
+  // vertices19.push_back(VEC3(23, 0.0, -6));
+  // vertices19.push_back(VEC3(23, 8, -6));
+  // vertices19.push_back(VEC3(19, 8, -6));
+  // portal.push_back(0);
+  // for(int i = 0; i < vertices19.size(); i = i+1){
+  //   vertices19[i] = vertices19[i] - center;
+  // }
+  // for(int i = 0; i < vertices19.size(); i=i+1){
+  //   vertices19[i] = rotation * vertices19[i];
+  // }
+  // for(int i = 0; i < vertices19.size(); i=i+1){
+  //   vertices19[i] = vertices19[i] + center;
+  // }
+  // triangleVertices.push_back(vertices19);
+
+  // vector<VEC3> vertices20;
+  // vertices20.push_back(VEC3(19, 8, -6));
+  // vertices20.push_back(VEC3(19, 0.0, -6));
+  // vertices20.push_back(VEC3(23, 0.0, -6));
+  // portal.push_back(0);
+  // for(int i = 0; i < vertices20.size(); i = i+1){
+  //   vertices20[i] = vertices20[i] - center;
+  // }
+  // for(int i = 0; i < vertices20.size(); i=i+1){
+  //   vertices20[i] = rotation * vertices20[i];
+  // }
+  // for(int i = 0; i < vertices20.size(); i=i+1){
+  //   vertices20[i] = vertices20[i] + center;
+  // }
+  // triangleVertices.push_back(vertices20);
+
+  // triangleColors.push_back(VEC3(0.929, 0.929, 0.929));
+  // triangleColors.push_back(VEC3(0.929, 0.929, 0.929));
 
 }
 
@@ -910,6 +1018,10 @@ void buildScene()
   sphereColors.push_back(VEC3(1, 0, 0));
 
   sphereCenters.push_back(VEC3(8.0, 2.6, -2.2));
+  sphereRadii.push_back(2.2);
+  sphereColors.push_back(VEC3(0, 1, 0));
+
+  sphereCenters.push_back(VEC3(15, 3.3, -1.5));
   sphereRadii.push_back(2.2);
   sphereColors.push_back(VEC3(0, 1, 0));
 }
@@ -944,6 +1056,7 @@ int main(int argc, char** argv)
     sprintf(buffer, "./frames/frame.%04i.ppm", x / 8);
     renderImage(windowWidth, windowHeight, buffer);
     cout << "Rendered " + to_string(x / 8) + " frames" << endl;
+    break;
   }
 
   return 0;

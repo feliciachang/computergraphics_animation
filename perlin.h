@@ -4,8 +4,8 @@
 // JAVA IMPLEMENTATION OF THE IMPROVED PERLIN FUNCTION (see http://mrl.nyu.edu/~perlin/noise/)
 // THE ORIGINAL JAVA IMPLEMENTATION IS COPYRIGHT 2002 KEN PERLIN
 
-// I ADDED AN EXTRA METHOD THAT GENERATES A NEW PERMUTATION VECTOR (THIS IS NOT PRESENT IN THE ORIGINAL IMPLEMENTATION)
-
+// https://github.com/sol-prog/Perlin_Noise 
+//the code in perlin.h and perlin.cpp were taken from the github link above. it is a direct translation of ken perlin's implementation
 #ifndef PERLIN_H
 #define PERLIN_H
 
